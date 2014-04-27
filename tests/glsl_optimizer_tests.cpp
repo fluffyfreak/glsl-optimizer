@@ -250,6 +250,7 @@ static bool CheckGLSL (bool vertex, bool gles, const std::string& testName, cons
 		replace_string (src, "#extension GL_EXT_shadow_samplers : enable", "", 0);
 		replace_string (src, "#extension GL_EXT_frag_depth : enable", "", 0);
 		replace_string (src, "precision ", "// precision ", 0);
+		replace_string (src, "#version 300 es", "#version 330", 0);
 	}
 	const char* sourcePtr = src.c_str();
 
@@ -410,6 +411,14 @@ static bool TestFile (glslopt_ctx* ctx, bool vertex,
 	{
 		std::string textHir = glslopt_get_raw_output (shader);
 		std::string textOpt = glslopt_get_output (shader);
+
+		char buffer[200];
+		int statsAlu, statsTex, statsFlow;
+		glslopt_shader_get_stats (shader, &statsAlu, &statsTex, &statsFlow);
+		int inputCount = glslopt_shader_get_input_count (shader);
+		sprintf(buffer, "\n// inputs: %i, stats: %i alu %i tex %i flow\n", inputCount, statsAlu, statsTex, statsFlow);
+		textOpt += buffer;
+
 		std::string outputHir;
 		ReadStringFromFile (hirPath.c_str(), outputHir);
 		std::string outputOpt;
@@ -474,14 +483,18 @@ int main (int argc, const char** argv)
 	}
 
 	bool hasOpenGL = InitializeOpenGL ();
-	glslopt_ctx* ctx[2] = {
+	glslopt_ctx* ctx[3] = {
 		glslopt_initialize(kGlslTargetOpenGLES20),
+		glslopt_initialize(kGlslTargetOpenGLES30),
 		glslopt_initialize(kGlslTargetOpenGL),
 	};
 
 	std::string baseFolder = argv[1];
 
 	clock_t time0 = clock();
+
+	// 2.39s
+	// ralloc fix 256 initial: 1.35s
 
 	static const char* kTypeName[2] = { "vertex", "fragment" };
 	size_t tests = 0;
@@ -490,11 +503,11 @@ int main (int argc, const char** argv)
 	{
 		std::string testFolder = baseFolder + "/" + kTypeName[type];
 
-		static const char* kAPIName[2] = { "OpenGL ES 2.0", "OpenGL" };
-		static const char* kApiIn [2] = {"-inES.txt", "-in.txt"};
-		static const char* kApiIR [2] = {"-irES.txt", "-ir.txt"};
-		static const char* kApiOut[2] = {"-outES.txt", "-out.txt"};
-		for (int api = 0; api < 2; ++api)
+		static const char* kAPIName[3] = { "OpenGL ES 2.0", "OpenGL ES 3.0", "OpenGL" };
+		static const char* kApiIn [3] = {"-inES.txt", "-inES3.txt", "-in.txt"};
+		static const char* kApiIR [3] = {"-irES.txt", "-irES3.txt", "-ir.txt"};
+		static const char* kApiOut[3] = {"-outES.txt", "-outES3.txt", "-out.txt"};
+		for (int api = 0; api < 3; ++api)
 		{
 			printf ("\n** running %s tests for %s...\n", kTypeName[type], kAPIName[api]);
 			StringVector inputFiles = GetFiles (testFolder, kApiIn[api]);

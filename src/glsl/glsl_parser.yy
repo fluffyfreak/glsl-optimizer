@@ -48,6 +48,32 @@ _mesa_glsl_lex(YYSTYPE *val, YYLTYPE *loc, _mesa_glsl_parse_state *state)
 {
    return _mesa_glsl_lexer_lex(val, loc, state->scanner);
 }
+
+static bool match_layout_qualifier(const char *s1, const char *s2,
+                                   _mesa_glsl_parse_state *state)
+{
+   /* From the GLSL 1.50 spec, section 4.3.8 (Layout Qualifiers):
+    *
+    *     "The tokens in any layout-qualifier-id-list ... are not case
+    *     sensitive, unless explicitly noted otherwise."
+    *
+    * The text "unless explicitly noted otherwise" appears to be
+    * vacuous--no desktop GLSL spec (up through GLSL 4.40) notes
+    * otherwise.
+    *
+    * However, the GLSL ES 3.00 spec says, in section 4.3.8 (Layout
+    * Qualifiers):
+    *
+    *     "As for other identifiers, they are case sensitive."
+    *
+    * So we need to do a case-sensitive or a case-insensitive match,
+    * depending on whether we are compiling for GLSL ES.
+    */
+   if (state->es_shader)
+      return strcmp(s1, s2);
+   else
+      return strcasecmp(s1, s2);
+}
 %}
 
 %expect 0
@@ -76,6 +102,7 @@ _mesa_glsl_lex(YYSTYPE *val, YYLTYPE *loc, _mesa_glsl_parse_state *state)
 
    ast_node *node;
    ast_type_specifier *type_specifier;
+   ast_array_specifier *array_specifier;
    ast_fully_specified_type *fully_specified_type;
    ast_function *function;
    ast_parameter_declarator *parameter_declarator;
@@ -123,6 +150,15 @@ _mesa_glsl_lex(YYSTYPE *val, YYLTYPE *loc, _mesa_glsl_parse_state *state)
 %token SAMPLER2DMS ISAMPLER2DMS USAMPLER2DMS
 %token SAMPLER2DMSARRAY ISAMPLER2DMSARRAY USAMPLER2DMSARRAY
 %token SAMPLEREXTERNALOES
+%token IMAGE1D IMAGE2D IMAGE3D IMAGE2DRECT IMAGECUBE IMAGEBUFFER
+%token IMAGE1DARRAY IMAGE2DARRAY IMAGECUBEARRAY IMAGE2DMS IMAGE2DMSARRAY
+%token IIMAGE1D IIMAGE2D IIMAGE3D IIMAGE2DRECT IIMAGECUBE IIMAGEBUFFER
+%token IIMAGE1DARRAY IIMAGE2DARRAY IIMAGECUBEARRAY IIMAGE2DMS IIMAGE2DMSARRAY
+%token UIMAGE1D UIMAGE2D UIMAGE3D UIMAGE2DRECT UIMAGECUBE UIMAGEBUFFER
+%token UIMAGE1DARRAY UIMAGE2DARRAY UIMAGECUBEARRAY UIMAGE2DMS UIMAGE2DMSARRAY
+%token IMAGE1DSHADOW IMAGE2DSHADOW IMAGE1DARRAYSHADOW IMAGE2DARRAYSHADOW
+%token COHERENT VOLATILE RESTRICT READONLY WRITEONLY
+%token ATOMIC_UINT
 %token STRUCT VOID_TOK WHILE
 %token <identifier> IDENTIFIER TYPE_IDENTIFIER NEW_IDENTIFIER
 %type <identifier> any_identifier
@@ -147,23 +183,17 @@ _mesa_glsl_lex(YYSTYPE *val, YYLTYPE *loc, _mesa_glsl_parse_state *state)
    /* Reserved words that are not actually used in the grammar.
     */
 %token ASM CLASS UNION ENUM TYPEDEF TEMPLATE THIS PACKED_TOK GOTO
-%token INLINE_TOK NOINLINE VOLATILE PUBLIC_TOK STATIC EXTERN EXTERNAL
+%token INLINE_TOK NOINLINE PUBLIC_TOK STATIC EXTERN EXTERNAL
 %token LONG_TOK SHORT_TOK DOUBLE_TOK HALF FIXED_TOK UNSIGNED INPUT_TOK OUPTUT
 %token HVEC2 HVEC3 HVEC4 DVEC2 DVEC3 DVEC4 FVEC2 FVEC3 FVEC4
 %token SAMPLER3DRECT
 %token SIZEOF CAST NAMESPACE USING
-%token COHERENT RESTRICT READONLY WRITEONLY RESOURCE ATOMIC_UINT PATCH SAMPLE
+%token RESOURCE PATCH SAMPLE
 %token SUBROUTINE
 
 %token ERROR_TOK
 
-%token COMMON PARTITION ACTIVE FILTER
-%token  IMAGE1D  IMAGE2D  IMAGE3D  IMAGECUBE  IMAGE1DARRAY  IMAGE2DARRAY
-%token IIMAGE1D IIMAGE2D IIMAGE3D IIMAGECUBE IIMAGE1DARRAY IIMAGE2DARRAY
-%token UIMAGE1D UIMAGE2D UIMAGE3D UIMAGECUBE UIMAGE1DARRAY UIMAGE2DARRAY
-%token IMAGE1DSHADOW IMAGE2DSHADOW IMAGEBUFFER IIMAGEBUFFER UIMAGEBUFFER
-%token IMAGE1DARRAYSHADOW IMAGE2DARRAYSHADOW
-%token ROW_MAJOR
+%token COMMON PARTITION ACTIVE FILTER ROW_MAJOR
 
 %type <identifier> variable_identifier
 %type <node> statement
@@ -180,6 +210,7 @@ _mesa_glsl_lex(YYSTYPE *val, YYLTYPE *loc, _mesa_glsl_parse_state *state)
 %type <type_qualifier> interface_qualifier
 %type <type_specifier> type_specifier
 %type <type_specifier> type_specifier_nonarray
+%type <array_specifier> array_specifier
 %type <identifier> basic_type_specifier_nonarray
 %type <fully_specified_type> fully_specified_type
 %type <function> function_prototype
@@ -858,7 +889,7 @@ parameter_declarator:
       $$->type->specifier = $1;
       $$->identifier = $2;
    }
-   | type_specifier any_identifier '[' constant_expression ']'
+   | type_specifier any_identifier array_specifier
    {
       void *ctx = state;
       $$ = new(ctx) ast_parameter_declarator();
@@ -867,8 +898,7 @@ parameter_declarator:
       $$->type->set_location(yylloc);
       $$->type->specifier = $1;
       $$->identifier = $2;
-      $$->is_array = true;
-      $$->array_size = $4;
+      $$->array_specifier = $3;
    }
    ;
 
@@ -959,76 +989,42 @@ init_declarator_list:
    | init_declarator_list ',' any_identifier
    {
       void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($3, false, NULL, NULL);
+      ast_declaration *decl = new(ctx) ast_declaration($3, NULL, NULL);
       decl->set_location(yylloc);
 
       $$ = $1;
       $$->declarations.push_tail(&decl->link);
       state->symbols->add_variable(new(state) ir_variable(NULL, $3, ir_var_auto, glsl_precision_undefined));
    }
-   | init_declarator_list ',' any_identifier '[' ']'
+   | init_declarator_list ',' any_identifier array_specifier
    {
       void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($3, true, NULL, NULL);
+      ast_declaration *decl = new(ctx) ast_declaration($3, $4, NULL);
       decl->set_location(yylloc);
 
       $$ = $1;
       $$->declarations.push_tail(&decl->link);
       state->symbols->add_variable(new(state) ir_variable(NULL, $3, ir_var_auto, glsl_precision_undefined));
    }
-   | init_declarator_list ',' any_identifier '[' constant_expression ']'
+   | init_declarator_list ',' any_identifier array_specifier '=' initializer
    {
       void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($3, true, $5, NULL);
+      ast_declaration *decl = new(ctx) ast_declaration($3, $4, $6);
       decl->set_location(yylloc);
 
       $$ = $1;
       $$->declarations.push_tail(&decl->link);
       state->symbols->add_variable(new(state) ir_variable(NULL, $3, ir_var_auto, glsl_precision_undefined));
-   }
-   | init_declarator_list ',' any_identifier '[' ']' '=' initializer
-   {
-      void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($3, true, NULL, $7);
-      decl->set_location(yylloc);
-
-      $$ = $1;
-      $$->declarations.push_tail(&decl->link);
-      state->symbols->add_variable(new(state) ir_variable(NULL, $3, ir_var_auto, glsl_precision_undefined));
-      if ($7->oper == ast_aggregate) {
-         ast_aggregate_initializer *ai = (ast_aggregate_initializer *)$7;
-         ast_type_specifier *type = new(ctx) ast_type_specifier($1->type->specifier, true, NULL);
-         _mesa_ast_set_aggregate_type(type, ai, state);
-      }
-   }
-   | init_declarator_list ',' any_identifier '[' constant_expression ']' '=' initializer
-   {
-      void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($3, true, $5, $8);
-      decl->set_location(yylloc);
-
-      $$ = $1;
-      $$->declarations.push_tail(&decl->link);
-      state->symbols->add_variable(new(state) ir_variable(NULL, $3, ir_var_auto, glsl_precision_undefined));
-      if ($8->oper == ast_aggregate) {
-         ast_aggregate_initializer *ai = (ast_aggregate_initializer *)$8;
-         ast_type_specifier *type = new(ctx) ast_type_specifier($1->type->specifier, true, $5);
-         _mesa_ast_set_aggregate_type(type, ai, state);
-      }
    }
    | init_declarator_list ',' any_identifier '=' initializer
    {
       void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($3, false, NULL, $5);
+      ast_declaration *decl = new(ctx) ast_declaration($3, NULL, $5);
       decl->set_location(yylloc);
 
       $$ = $1;
       $$->declarations.push_tail(&decl->link);
       state->symbols->add_variable(new(state) ir_variable(NULL, $3, ir_var_auto, glsl_precision_undefined));
-      if ($5->oper == ast_aggregate) {
-         ast_aggregate_initializer *ai = (ast_aggregate_initializer *)$5;
-         _mesa_ast_set_aggregate_type($1->type->specifier, ai, state);
-      }
    }
    ;
 
@@ -1044,74 +1040,43 @@ single_declaration:
    | fully_specified_type any_identifier
    {
       void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($2, false, NULL, NULL);
+      ast_declaration *decl = new(ctx) ast_declaration($2, NULL, NULL);
 
       $$ = new(ctx) ast_declarator_list($1);
       $$->set_location(yylloc);
       $$->declarations.push_tail(&decl->link);
    }
-   | fully_specified_type any_identifier '[' ']'
+   | fully_specified_type any_identifier array_specifier
    {
       void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($2, true, NULL, NULL);
+      ast_declaration *decl = new(ctx) ast_declaration($2, $3, NULL);
 
       $$ = new(ctx) ast_declarator_list($1);
       $$->set_location(yylloc);
       $$->declarations.push_tail(&decl->link);
    }
-   | fully_specified_type any_identifier '[' constant_expression ']'
+   | fully_specified_type any_identifier array_specifier '=' initializer
    {
       void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($2, true, $4, NULL);
+      ast_declaration *decl = new(ctx) ast_declaration($2, $3, $5);
 
       $$ = new(ctx) ast_declarator_list($1);
       $$->set_location(yylloc);
       $$->declarations.push_tail(&decl->link);
-   }
-   | fully_specified_type any_identifier '[' ']' '=' initializer
-   {
-      void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($2, true, NULL, $6);
-
-      $$ = new(ctx) ast_declarator_list($1);
-      $$->set_location(yylloc);
-      $$->declarations.push_tail(&decl->link);
-      if ($6->oper == ast_aggregate) {
-         ast_aggregate_initializer *ai = (ast_aggregate_initializer *)$6;
-         ast_type_specifier *type = new(ctx) ast_type_specifier($1->specifier, true, NULL);
-         _mesa_ast_set_aggregate_type(type, ai, state);
-      }
-   }
-   | fully_specified_type any_identifier '[' constant_expression ']' '=' initializer
-   {
-      void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($2, true, $4, $7);
-
-      $$ = new(ctx) ast_declarator_list($1);
-      $$->set_location(yylloc);
-      $$->declarations.push_tail(&decl->link);
-      if ($7->oper == ast_aggregate) {
-         ast_aggregate_initializer *ai = (ast_aggregate_initializer *)$7;
-         ast_type_specifier *type = new(ctx) ast_type_specifier($1->specifier, true, $4);
-         _mesa_ast_set_aggregate_type(type, ai, state);
-      }
    }
    | fully_specified_type any_identifier '=' initializer
    {
       void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($2, false, NULL, $4);
+      ast_declaration *decl = new(ctx) ast_declaration($2, NULL, $4);
 
       $$ = new(ctx) ast_declarator_list($1);
       $$->set_location(yylloc);
       $$->declarations.push_tail(&decl->link);
-      if ($4->oper == ast_aggregate) {
-         _mesa_ast_set_aggregate_type($1->specifier, $4, state);
-      }
    }
    | INVARIANT variable_identifier // Vertex only.
    {
       void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($2, false, NULL, NULL);
+      ast_declaration *decl = new(ctx) ast_declaration($2, NULL, NULL);
 
       $$ = new(ctx) ast_declarator_list(NULL);
       $$->set_location(yylloc);
@@ -1171,9 +1136,10 @@ layout_qualifier_id:
       /* Layout qualifiers for ARB_fragment_coord_conventions. */
       if (!$$.flags.i && (state->ARB_fragment_coord_conventions_enable ||
                           state->is_version(150, 0))) {
-         if (strcmp($1, "origin_upper_left") == 0) {
+         if (match_layout_qualifier($1, "origin_upper_left", state) == 0) {
             $$.flags.q.origin_upper_left = 1;
-         } else if (strcmp($1, "pixel_center_integer") == 0) {
+         } else if (match_layout_qualifier($1, "pixel_center_integer",
+                                           state) == 0) {
             $$.flags.q.pixel_center_integer = 1;
          }
 
@@ -1188,13 +1154,14 @@ layout_qualifier_id:
       if (!$$.flags.i &&
           (state->AMD_conservative_depth_enable ||
            state->ARB_conservative_depth_enable)) {
-         if (strcmp($1, "depth_any") == 0) {
+         if (match_layout_qualifier($1, "depth_any", state) == 0) {
             $$.flags.q.depth_any = 1;
-         } else if (strcmp($1, "depth_greater") == 0) {
+         } else if (match_layout_qualifier($1, "depth_greater", state) == 0) {
             $$.flags.q.depth_greater = 1;
-         } else if (strcmp($1, "depth_less") == 0) {
+         } else if (match_layout_qualifier($1, "depth_less", state) == 0) {
             $$.flags.q.depth_less = 1;
-         } else if (strcmp($1, "depth_unchanged") == 0) {
+         } else if (match_layout_qualifier($1, "depth_unchanged",
+                                           state) == 0) {
             $$.flags.q.depth_unchanged = 1;
          }
 
@@ -1211,21 +1178,33 @@ layout_qualifier_id:
       }
 
       /* See also interface_block_layout_qualifier. */
-      if (!$$.flags.i && state->ARB_uniform_buffer_object_enable) {
-         if (strcmp($1, "std140") == 0) {
+      if (!$$.flags.i && state->has_uniform_buffer_objects()) {
+         if (match_layout_qualifier($1, "std140", state) == 0) {
             $$.flags.q.std140 = 1;
-         } else if (strcmp($1, "shared") == 0) {
+         } else if (match_layout_qualifier($1, "shared", state) == 0) {
             $$.flags.q.shared = 1;
-         } else if (strcmp($1, "column_major") == 0) {
+         } else if (match_layout_qualifier($1, "column_major", state) == 0) {
             $$.flags.q.column_major = 1;
          /* "row_major" is a reserved word in GLSL 1.30+. Its token is parsed
           * below in the interface_block_layout_qualifier rule.
           *
           * It is not a reserved word in GLSL ES 3.00, so it's handled here as
           * an identifier.
+          *
+          * Also, this takes care of alternate capitalizations of
+          * "row_major" (which is necessary because layout qualifiers
+          * are case-insensitive in desktop GLSL).
           */
-         } else if (strcmp($1, "row_major") == 0) {
+         } else if (match_layout_qualifier($1, "row_major", state) == 0) {
             $$.flags.q.row_major = 1;
+         /* "packed" is a reserved word in GLSL, and its token is
+          * parsed below in the interface_block_layout_qualifier rule.
+          * However, we must take care of alternate capitalizations of
+          * "packed", because layout qualifiers are case-insensitive
+          * in desktop GLSL.
+          */
+         } else if (match_layout_qualifier($1, "packed", state) == 0) {
+           $$.flags.q.packed = 1;
          }
 
          if ($$.flags.i && state->ARB_uniform_buffer_object_warn) {
@@ -1250,7 +1229,7 @@ layout_qualifier_id:
                  { "triangle_strip", GL_TRIANGLE_STRIP },
          };
          for (unsigned i = 0; i < Elements(map); i++) {
-            if (strcmp($1, map[i].s) == 0) {
+            if (match_layout_qualifier($1, map[i].s, state) == 0) {
                $$.flags.q.prim_type = 1;
                $$.prim_type = map[i].e;
                break;
@@ -1260,6 +1239,72 @@ layout_qualifier_id:
          if ($$.flags.i && !state->is_version(150, 0)) {
             _mesa_glsl_error(& @1, state, "#version 150 layout "
                              "qualifier `%s' used", $1);
+         }
+      }
+
+      /* Layout qualifiers for ARB_shader_image_load_store. */
+      if (state->ARB_shader_image_load_store_enable ||
+          state->is_version(420, 0)) {
+         if (!$$.flags.i) {
+            static const struct {
+               const char *name;
+               GLenum format;
+               glsl_base_type base_type;
+            } map[] = {
+               { "rgba32f", GL_RGBA32F, GLSL_TYPE_FLOAT },
+               { "rgba16f", GL_RGBA16F, GLSL_TYPE_FLOAT },
+               { "rg32f", GL_RG32F, GLSL_TYPE_FLOAT },
+               { "rg16f", GL_RG16F, GLSL_TYPE_FLOAT },
+               { "r11f_g11f_b10f", GL_R11F_G11F_B10F, GLSL_TYPE_FLOAT },
+               { "r32f", GL_R32F, GLSL_TYPE_FLOAT },
+               { "r16f", GL_R16F, GLSL_TYPE_FLOAT },
+               { "rgba32ui", GL_RGBA32UI, GLSL_TYPE_UINT },
+               { "rgba16ui", GL_RGBA16UI, GLSL_TYPE_UINT },
+               { "rgb10_a2ui", GL_RGB10_A2UI, GLSL_TYPE_UINT },
+               { "rgba8ui", GL_RGBA8UI, GLSL_TYPE_UINT },
+               { "rg32ui", GL_RG32UI, GLSL_TYPE_UINT },
+               { "rg16ui", GL_RG16UI, GLSL_TYPE_UINT },
+               { "rg8ui", GL_RG8UI, GLSL_TYPE_UINT },
+               { "r32ui", GL_R32UI, GLSL_TYPE_UINT },
+               { "r16ui", GL_R16UI, GLSL_TYPE_UINT },
+               { "r8ui", GL_R8UI, GLSL_TYPE_UINT },
+               { "rgba32i", GL_RGBA32I, GLSL_TYPE_INT },
+               { "rgba16i", GL_RGBA16I, GLSL_TYPE_INT },
+               { "rgba8i", GL_RGBA8I, GLSL_TYPE_INT },
+               { "rg32i", GL_RG32I, GLSL_TYPE_INT },
+               { "rg16i", GL_RG16I, GLSL_TYPE_INT },
+               { "rg8i", GL_RG8I, GLSL_TYPE_INT },
+               { "r32i", GL_R32I, GLSL_TYPE_INT },
+               { "r16i", GL_R16I, GLSL_TYPE_INT },
+               { "r8i", GL_R8I, GLSL_TYPE_INT },
+               { "rgba16", GL_RGBA16, GLSL_TYPE_FLOAT },
+               { "rgb10_a2", GL_RGB10_A2, GLSL_TYPE_FLOAT },
+               { "rgba8", GL_RGBA8, GLSL_TYPE_FLOAT },
+               { "rg16", GL_RG16, GLSL_TYPE_FLOAT },
+               { "rg8", GL_RG8, GLSL_TYPE_FLOAT },
+               { "r16", GL_R16, GLSL_TYPE_FLOAT },
+               { "r8", GL_R8, GLSL_TYPE_FLOAT },
+               { "rgba16_snorm", GL_RGBA16_SNORM, GLSL_TYPE_FLOAT },
+               { "rgba8_snorm", GL_RGBA8_SNORM, GLSL_TYPE_FLOAT },
+               { "rg16_snorm", GL_RG16_SNORM, GLSL_TYPE_FLOAT },
+               { "rg8_snorm", GL_RG8_SNORM, GLSL_TYPE_FLOAT },
+               { "r16_snorm", GL_R16_SNORM, GLSL_TYPE_FLOAT },
+               { "r8_snorm", GL_R8_SNORM, GLSL_TYPE_FLOAT }
+            };
+
+            for (unsigned i = 0; i < Elements(map); i++) {
+               if (match_layout_qualifier($1, map[i].name, state) == 0) {
+                  $$.flags.q.explicit_image_format = 1;
+                  $$.image_format = map[i].format;
+                  $$.image_base_type = map[i].base_type;
+                  break;
+               }
+            }
+         }
+
+         if (!$$.flags.i &&
+             match_layout_qualifier($1, "early_fragment_tests", state) == 0) {
+            $$.flags.q.early_fragment_tests = 1;
          }
       }
 
@@ -1274,39 +1319,42 @@ layout_qualifier_id:
       memset(& $$, 0, sizeof($$));
 	  $$.precision = ast_precision_none;
 
-      if (state->ARB_explicit_attrib_location_enable) {
-         if (strcmp("location", $1) == 0) {
-            $$.flags.q.explicit_location = 1;
+      if (match_layout_qualifier("location", $1, state) == 0) {
+         $$.flags.q.explicit_location = 1;
 
-            if ($3 >= 0) {
-               $$.location = $3;
-            } else {
-               _mesa_glsl_error(& @3, state,
-                                "invalid location %d specified", $3);
-               YYERROR;
-            }
-         }
-
-         if (strcmp("index", $1) == 0) {
-            $$.flags.q.explicit_index = 1;
-
-            if ($3 >= 0) {
-               $$.index = $3;
-            } else {
-               _mesa_glsl_error(& @3, state,
-                                "invalid index %d specified", $3);
-               YYERROR;
-            }
+         if ($3 >= 0) {
+            $$.location = $3;
+         } else {
+             _mesa_glsl_error(& @3, state, "invalid location %d specified", $3);
+             YYERROR;
          }
       }
 
-      if (state->ARB_shading_language_420pack_enable &&
-          strcmp("binding", $1) == 0) {
+      if (match_layout_qualifier("index", $1, state) == 0) {
+         $$.flags.q.explicit_index = 1;
+
+         if ($3 >= 0) {
+            $$.index = $3;
+         } else {
+            _mesa_glsl_error(& @3, state, "invalid index %d specified", $3);
+            YYERROR;
+         }
+      }
+
+      if ((state->ARB_shading_language_420pack_enable ||
+           state->ARB_shader_atomic_counters_enable) &&
+          match_layout_qualifier("binding", $1, state) == 0) {
          $$.flags.q.explicit_binding = 1;
          $$.binding = $3;
       }
 
-      if (strcmp("max_vertices", $1) == 0) {
+      if (state->ARB_shader_atomic_counters_enable &&
+          match_layout_qualifier("offset", $1, state) == 0) {
+         $$.flags.q.explicit_offset = 1;
+         $$.offset = $3;
+      }
+
+      if (match_layout_qualifier("max_vertices", $1, state) == 0) {
          $$.flags.q.max_vertices = 1;
 
          if ($3 < 0) {
@@ -1320,6 +1368,34 @@ layout_qualifier_id:
                                 "#version 150 max_vertices qualifier "
                                 "specified", $3);
             }
+         }
+      }
+
+      static const char *local_size_qualifiers[3] = {
+         "local_size_x",
+         "local_size_y",
+         "local_size_z",
+      };
+      for (int i = 0; i < 3; i++) {
+         if (match_layout_qualifier(local_size_qualifiers[i], $1,
+                                    state) == 0) {
+            if ($3 <= 0) {
+               _mesa_glsl_error(& @3, state,
+                                "invalid %s of %d specified",
+                                local_size_qualifiers[i], $3);
+               YYERROR;
+            } else if (!state->is_version(430, 0) &&
+                       !state->ARB_compute_shader_enable) {
+               _mesa_glsl_error(& @3, state,
+                                "%s qualifier requires GLSL 4.30 or "
+                                "ARB_compute_shader",
+                                local_size_qualifiers[i]);
+               YYERROR;
+            } else {
+               $$.flags.q.local_size |= (1 << i);
+               $$.local_size[i] = $3;
+            }
+            break;
          }
       }
 
@@ -1340,7 +1416,7 @@ layout_qualifier_id:
    {
       $$ = $1;
       /* Layout qualifiers for ARB_uniform_buffer_object. */
-      if ($$.flags.q.uniform && !state->ARB_uniform_buffer_object_enable) {
+      if ($$.flags.q.uniform && !state->has_uniform_buffer_objects()) {
          _mesa_glsl_error(& @1, state,
                           "#version 140 / GL_ARB_uniform_buffer_object "
                           "layout qualifier `%s' is used", $1);
@@ -1356,6 +1432,10 @@ layout_qualifier_id:
  * (due to them being reserved keywords) instead of identifiers like
  * most qualifiers.  See the any_identifier path of
  * layout_qualifier_id for the others.
+ *
+ * Note that since layout qualifiers are case-insensitive in desktop
+ * GLSL, all of these qualifiers need to be handled as identifiers as
+ * well (by the any_identifier path of layout_qualifier_id).
  */
 interface_block_layout_qualifier:
    ROW_MAJOR
@@ -1492,7 +1572,7 @@ type_qualifier:
    {
       if ($2.has_auxiliary_storage()) {
          _mesa_glsl_error(&@1, state,
-                          "duplicate auxiliary storage qualifier (centroid)");
+                          "duplicate auxiliary storage qualifier (centroid or sample)");
       }
 
       if (!state->ARB_shading_language_420pack_enable &&
@@ -1501,7 +1581,7 @@ type_qualifier:
                           "just before storage qualifiers");
       }
       $$ = $1;
-      $$.flags.i |= $2.flags.i;
+      $$.merge_qualifier(&@1, state, $2);
    }
    | storage_qualifier type_qualifier
    {
@@ -1543,7 +1623,12 @@ auxiliary_storage_qualifier:
 	  $$.precision = ast_precision_none;
       $$.flags.q.centroid = 1;
    }
-   /* TODO: "sample" and "patch" also go here someday. */
+   | SAMPLE
+   {
+      memset(& $$, 0, sizeof($$));
+      $$.flags.q.sample = 1;
+   }
+   /* TODO: "patch" also goes here someday. */
 
 storage_qualifier:
    CONST_TOK
@@ -1582,21 +1667,79 @@ storage_qualifier:
 	  $$.precision = ast_precision_none;
       $$.flags.q.uniform = 1;
    }
+   | COHERENT
+   {
+      memset(& $$, 0, sizeof($$));
+      $$.flags.q.coherent = 1;
+   }
+   | VOLATILE
+   {
+      memset(& $$, 0, sizeof($$));
+      $$.flags.q._volatile = 1;
+   }
+   | RESTRICT
+   {
+      STATIC_ASSERT(sizeof($$.flags.q) <= sizeof($$.flags.i));
+      memset(& $$, 0, sizeof($$));
+      $$.flags.q.restrict_flag = 1;
+   }
+   | READONLY
+   {
+      memset(& $$, 0, sizeof($$));
+      $$.flags.q.read_only = 1;
+   }
+   | WRITEONLY
+   {
+      memset(& $$, 0, sizeof($$));
+      $$.flags.q.write_only = 1;
+   }
+   ;
+
+array_specifier:
+   '[' ']'
+   {
+      void *ctx = state;
+      $$ = new(ctx) ast_array_specifier(yylloc);
+   }
+   | '[' constant_expression ']'
+   {
+      void *ctx = state;
+      $$ = new(ctx) ast_array_specifier(yylloc, $2);
+   }
+   | array_specifier '[' ']'
+   {
+      $$ = $1;
+
+      if (!state->ARB_arrays_of_arrays_enable) {
+         _mesa_glsl_error(& @1, state,
+                          "GL_ARB_arrays_of_arrays "
+                          "required for defining arrays of arrays");
+      } else {
+         _mesa_glsl_error(& @1, state,
+                          "only the outermost array dimension can "
+                          "be unsized");
+      }
+   }
+   | array_specifier '[' constant_expression ']'
+   {
+      $$ = $1;
+
+      if (!state->ARB_arrays_of_arrays_enable) {
+         _mesa_glsl_error(& @1, state,
+                          "GL_ARB_arrays_of_arrays "
+                          "required for defining arrays of arrays");
+      }
+
+      $$->add_dimension($3);
+   }
    ;
 
 type_specifier:
    type_specifier_nonarray
-   | type_specifier_nonarray '[' ']'
+   | type_specifier_nonarray array_specifier
    {
       $$ = $1;
-      $$->is_array = true;
-      $$->array_size = NULL;
-   }
-   | type_specifier_nonarray '[' constant_expression ']'
-   {
-      $$ = $1;
-      $$->is_array = true;
-      $$->array_size = $3;
+      $$->array_specifier = $2;
    }
    ;
 
@@ -1689,6 +1832,40 @@ basic_type_specifier_nonarray:
    | SAMPLER2DMSARRAY       { $$ = "sampler2DMSArray"; }
    | ISAMPLER2DMSARRAY      { $$ = "isampler2DMSArray"; }
    | USAMPLER2DMSARRAY      { $$ = "usampler2DMSArray"; }
+   | IMAGE1D                { $$ = "image1D"; }
+   | IMAGE2D                { $$ = "image2D"; }
+   | IMAGE3D                { $$ = "image3D"; }
+   | IMAGE2DRECT            { $$ = "image2DRect"; }
+   | IMAGECUBE              { $$ = "imageCube"; }
+   | IMAGEBUFFER            { $$ = "imageBuffer"; }
+   | IMAGE1DARRAY           { $$ = "image1DArray"; }
+   | IMAGE2DARRAY           { $$ = "image2DArray"; }
+   | IMAGECUBEARRAY         { $$ = "imageCubeArray"; }
+   | IMAGE2DMS              { $$ = "image2DMS"; }
+   | IMAGE2DMSARRAY         { $$ = "image2DMSArray"; }
+   | IIMAGE1D               { $$ = "iimage1D"; }
+   | IIMAGE2D               { $$ = "iimage2D"; }
+   | IIMAGE3D               { $$ = "iimage3D"; }
+   | IIMAGE2DRECT           { $$ = "iimage2DRect"; }
+   | IIMAGECUBE             { $$ = "iimageCube"; }
+   | IIMAGEBUFFER           { $$ = "iimageBuffer"; }
+   | IIMAGE1DARRAY          { $$ = "iimage1DArray"; }
+   | IIMAGE2DARRAY          { $$ = "iimage2DArray"; }
+   | IIMAGECUBEARRAY        { $$ = "iimageCubeArray"; }
+   | IIMAGE2DMS             { $$ = "iimage2DMS"; }
+   | IIMAGE2DMSARRAY        { $$ = "iimage2DMSArray"; }
+   | UIMAGE1D               { $$ = "uimage1D"; }
+   | UIMAGE2D               { $$ = "uimage2D"; }
+   | UIMAGE3D               { $$ = "uimage3D"; }
+   | UIMAGE2DRECT           { $$ = "uimage2DRect"; }
+   | UIMAGECUBE             { $$ = "uimageCube"; }
+   | UIMAGEBUFFER           { $$ = "uimageBuffer"; }
+   | UIMAGE1DARRAY          { $$ = "uimage1DArray"; }
+   | UIMAGE2DARRAY          { $$ = "uimage2DArray"; }
+   | UIMAGECUBEARRAY        { $$ = "uimageCubeArray"; }
+   | UIMAGE2DMS             { $$ = "uimage2DMS"; }
+   | UIMAGE2DMSARRAY        { $$ = "uimage2DMSArray"; }
+   | ATOMIC_UINT            { $$ = "atomic_uint"; }
    ;
 
 precision_qualifier:
@@ -1775,13 +1952,13 @@ struct_declarator:
    any_identifier
    {
       void *ctx = state;
-      $$ = new(ctx) ast_declaration($1, false, NULL, NULL);
+      $$ = new(ctx) ast_declaration($1, NULL, NULL);
       $$->set_location(yylloc);
    }
-   | any_identifier '[' constant_expression ']'
+   | any_identifier array_specifier
    {
       void *ctx = state;
-      $$ = new(ctx) ast_declaration($1, true, $3, NULL);
+      $$ = new(ctx) ast_declaration($1, $2, NULL);
       $$->set_location(yylloc);
    }
    ;
@@ -1939,7 +2116,7 @@ condition:
    | fully_specified_type any_identifier '=' initializer
    {
       void *ctx = state;
-      ast_declaration *decl = new(ctx) ast_declaration($2, false, NULL, $4);
+      ast_declaration *decl = new(ctx) ast_declaration($2, NULL, $4);
       ast_declarator_list *declarator = new(ctx) ast_declarator_list($1);
       decl->set_location(yylloc);
       declarator->set_location(yylloc);
@@ -2164,7 +2341,7 @@ basic_interface_block:
       block->declarations.push_degenerate_list_at_head(& $4->link);
 
       if ($1.flags.q.uniform) {
-         if (!state->ARB_uniform_buffer_object_enable) {
+         if (!state->has_uniform_buffer_objects()) {
             _mesa_glsl_error(& @1, state,
                              "#version 140 / GL_ARB_uniform_buffer_object "
                              "required for defining uniform blocks");
@@ -2185,11 +2362,11 @@ basic_interface_block:
        * "It is illegal to have an input block in a vertex shader
        *  or an output block in a fragment shader"
        */
-      if ((state->target == vertex_shader) && $1.flags.q.in) {
+      if ((state->stage == MESA_SHADER_VERTEX) && $1.flags.q.in) {
          _mesa_glsl_error(& @1, state,
                           "`in' interface block is not allowed for "
                           "a vertex shader");
-      } else if ((state->target == fragment_shader) && $1.flags.q.out) {
+      } else if ((state->stage == MESA_SHADER_FRAGMENT) && $1.flags.q.out) {
          _mesa_glsl_error(& @1, state,
                           "`out' interface block is not allowed for "
                           "a fragment shader");
@@ -2204,7 +2381,7 @@ basic_interface_block:
                                "an instance name are not allowed");
       }
 
-      unsigned interface_type_mask;
+      uint64_t interface_type_mask;
       struct ast_type_qualifier temp_type_qualifier;
 
       /* Get a bitmask containing only the in/out/uniform flags, allowing us
@@ -2220,7 +2397,7 @@ basic_interface_block:
        * production rule guarantees that only one bit will be set (and
        * it will be in/out/uniform).
        */
-       unsigned block_interface_qualifier = $1.flags.i;
+      uint64_t block_interface_qualifier = $1.flags.i;
 
       block->layout.flags.i |= block_interface_qualifier;
 
@@ -2277,22 +2454,17 @@ instance_name_opt:
    /* empty */
    {
       $$ = new(state) ast_interface_block(*state->default_uniform_qualifier,
-                                          NULL, false, NULL);
+                                          NULL, NULL);
    }
    | NEW_IDENTIFIER
    {
       $$ = new(state) ast_interface_block(*state->default_uniform_qualifier,
-                                          $1, false, NULL);
+                                          $1, NULL);
    }
-   | NEW_IDENTIFIER '[' constant_expression ']'
+   | NEW_IDENTIFIER array_specifier
    {
       $$ = new(state) ast_interface_block(*state->default_uniform_qualifier,
-                                          $1, true, $3);
-   }
-   | NEW_IDENTIFIER '[' ']'
-   {
-      $$ = new(state) ast_interface_block(*state->default_uniform_qualifier,
-                                          $1, true, NULL);
+                                          $1, $2);
    }
    ;
 
@@ -2345,26 +2517,86 @@ layout_defaults:
    | layout_qualifier IN_TOK ';'
    {
       void *ctx = state;
-      if (state->target != geometry_shader) {
+      $$ = NULL;
+      switch (state->stage) {
+      case MESA_SHADER_GEOMETRY: {
+         if (!$1.flags.q.prim_type) {
+            _mesa_glsl_error(& @1, state,
+                             "input layout qualifiers must specify a primitive"
+                             " type");
+         } else {
+            /* Make sure this is a valid input primitive type. */
+            switch ($1.prim_type) {
+            case GL_POINTS:
+            case GL_LINES:
+            case GL_LINES_ADJACENCY:
+            case GL_TRIANGLES:
+            case GL_TRIANGLES_ADJACENCY:
+               $$ = new(ctx) ast_gs_input_layout(@1, $1.prim_type);
+               break;
+            default:
+               _mesa_glsl_error(&@1, state,
+                                "invalid geometry shader input primitive type");
+               break;
+            }
+         }
+      }
+         break;
+      case MESA_SHADER_FRAGMENT:
+         if ($1.flags.q.early_fragment_tests) {
+            state->early_fragment_tests = true;
+         } else {
+            _mesa_glsl_error(& @1, state, "invalid input layout qualifier");
+         }
+         break;
+      case MESA_SHADER_COMPUTE: {
+         if ($1.flags.q.local_size == 0) {
+            _mesa_glsl_error(& @1, state,
+                             "input layout qualifiers must specify a local "
+                             "size");
+         } else {
+            /* Infer a local_size of 1 for every unspecified dimension */
+            unsigned local_size[3];
+            for (int i = 0; i < 3; i++) {
+               if ($1.flags.q.local_size & (1 << i))
+                  local_size[i] = $1.local_size[i];
+               else
+                  local_size[i] = 1;
+            }
+            $$ = new(ctx) ast_cs_input_layout(@1, local_size);
+         }
+      }
+         break;
+      default:
          _mesa_glsl_error(& @1, state,
                           "input layout qualifiers only valid in "
-                          "geometry shaders");
-      } else if (!$1.flags.q.prim_type) {
-         _mesa_glsl_error(& @1, state,
-                          "input layout qualifiers must specify a primitive"
-                          " type");
+                          "geometry, fragment and compute shaders");
+         break;
       }
-      $$ = new(ctx) ast_gs_input_layout(@1, $1.prim_type);
    }
 
    | layout_qualifier OUT_TOK ';'
    {
-      if (state->target != geometry_shader) {
+      if (state->stage != MESA_SHADER_GEOMETRY) {
          _mesa_glsl_error(& @1, state,
                           "out layout qualifiers only valid in "
                           "geometry shaders");
-      } else if (!state->out_qualifier->merge_qualifier(& @1, state, $1)) {
-         YYERROR;
+      } else {
+         if ($1.flags.q.prim_type) {
+            /* Make sure this is a valid output primitive type. */
+            switch ($1.prim_type) {
+            case GL_POINTS:
+            case GL_LINE_STRIP:
+            case GL_TRIANGLE_STRIP:
+               break;
+            default:
+               _mesa_glsl_error(&@1, state, "invalid geometry shader output "
+                                "primitive type");
+               break;
+            }
+         }
+         if (!state->out_qualifier->merge_qualifier(& @1, state, $1))
+            YYERROR;
       }
       $$ = NULL;
    }

@@ -53,6 +53,8 @@ enum glsl_base_type {
    GLSL_TYPE_FLOAT,
    GLSL_TYPE_BOOL,
    GLSL_TYPE_SAMPLER,
+   GLSL_TYPE_IMAGE,
+   GLSL_TYPE_ATOMIC_UINT,
    GLSL_TYPE_STRUCT,
    GLSL_TYPE_INTERFACE,
    GLSL_TYPE_ARRAY,
@@ -95,8 +97,9 @@ struct glsl_type {
    unsigned sampler_dimensionality:3; /**< \see glsl_sampler_dim */
    unsigned sampler_shadow:1;
    unsigned sampler_array:1;
-   unsigned sampler_type:2;    /**< Type of data returned using this sampler.
-				* only \c GLSL_TYPE_FLOAT, \c GLSL_TYPE_INT,
+   unsigned sampler_type:2;    /**< Type of data returned using this
+				* sampler or image.  Only \c
+				* GLSL_TYPE_FLOAT, \c GLSL_TYPE_INT,
 				* and \c GLSL_TYPE_UINT are valid.
 				*/
    unsigned interface_packing:2;
@@ -241,7 +244,7 @@ struct glsl_type {
    static const glsl_type *get_interface_instance(const glsl_struct_field *fields,
 						  unsigned num_fields,
 						  enum glsl_interface_packing packing,
-						  const char *name);
+						  const char *block_name);
 
    /**
     * Query the total number of scalars that make up a scalar, vector or matrix
@@ -408,6 +411,20 @@ struct glsl_type {
    gl_texture_index sampler_index() const;
 
    /**
+    * Query whether or not type is an image, or for struct and array
+    * types, contains an image.
+    */
+   bool contains_image() const;
+
+   /**
+    * Query whether or not a type is an image
+    */
+   bool is_image() const
+   {
+      return base_type == GLSL_TYPE_IMAGE;
+   }
+
+   /**
     * Query whether or not a type is an array
     */
    bool is_array() const
@@ -448,6 +465,32 @@ struct glsl_type {
    }
 
    /**
+    * Return the amount of atomic counter storage required for a type.
+    */
+   unsigned atomic_size() const
+   {
+      if (base_type == GLSL_TYPE_ATOMIC_UINT)
+         return ATOMIC_COUNTER_SIZE;
+      else if (is_array())
+         return length * element_type()->atomic_size();
+      else
+         return 0;
+   }
+
+   /**
+    * Return whether a type contains any atomic counters.
+    */
+   bool contains_atomic() const
+   {
+      return atomic_size() > 0;
+   }
+
+   /**
+    * Return whether a type contains any opaque types.
+    */
+   bool contains_opaque() const;
+
+   /**
     * Query the full type of a matrix row
     *
     * \return
@@ -475,7 +518,6 @@ struct glsl_type {
 	 : error_type;
    }
 
-
    /**
     * Get the type of a structure field
     *
@@ -493,7 +535,6 @@ struct glsl_type {
     */
    int field_index(const char *name) const;
 
-
    /**
     * Query the number of elements in an array type
     *
@@ -506,6 +547,34 @@ struct glsl_type {
    {
       return is_array() ? length : -1;
    }
+
+   /**
+    * Query whether the array size for all dimensions has been declared.
+    */
+   bool is_unsized_array() const
+   {
+      return is_array() && length == 0;
+   }
+
+   /**
+    * Return the number of coordinate components needed for this
+    * sampler or image type.
+    *
+    * This is based purely on the sampler's dimensionality.  For example, this
+    * returns 1 for sampler1D, and 3 for sampler2DArray.
+    *
+    * Note that this is often different than actual coordinate type used in
+    * a texturing built-in function, since those pack additional values (such
+    * as the shadow comparitor or projector) into the coordinate type.
+    */
+   int coordinate_components() const;
+
+   /**
+    * Compare a record type against another record type.
+    *
+    * This is useful for matching record types declared across shader stages.
+    */
+   bool record_compare(const glsl_type *b) const;
 
 private:
    /**
@@ -522,8 +591,8 @@ private:
 	     glsl_base_type base_type, unsigned vector_elements,
 	     unsigned matrix_columns, const char *name);
 
-   /** Constructor for sampler types */
-   glsl_type(GLenum gl_type,
+   /** Constructor for sampler or image types */
+   glsl_type(GLenum gl_type, glsl_base_type base_type,
 	     enum glsl_sampler_dim dim, bool shadow, bool array,
 	     unsigned type, const char *name);
 
@@ -579,6 +648,33 @@ struct glsl_struct_field {
    const char *name;
    bool row_major;
    glsl_precision precision;
+
+   /**
+    * For interface blocks, gl_varying_slot corresponding to the input/output
+    * if this is a built-in input/output (i.e. a member of the built-in
+    * gl_PerVertex interface block); -1 otherwise.
+    *
+    * Ignored for structs.
+    */
+   int location;
+
+   /**
+    * For interface blocks, the interpolation mode (as in
+    * ir_variable::interpolation).  0 otherwise.
+    */
+   unsigned interpolation:2;
+
+   /**
+    * For interface blocks, 1 if this variable uses centroid interpolation (as
+    * in ir_variable::centroid).  0 otherwise.
+    */
+   unsigned centroid:1;
+
+   /**
+    * For interface blocks, 1 if this variable uses sample interpolation (as
+    * in ir_variable::sample). 0 otherwise.
+    */
+   unsigned sample:1;
 };
 
 static inline unsigned int

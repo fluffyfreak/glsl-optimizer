@@ -19,7 +19,9 @@ void main ()
   tmpvar_3.y = _SquashPlaneNormal.w;
   vec4 tmpvar_4;
   tmpvar_4.w = 1.0;
-  tmpvar_4.xyz = mix ((pos_1.xyz + (dot (_SquashPlaneNormal.xyz, (tmpvar_3 - pos_1.xyz)) * _SquashPlaneNormal.xyz)), pos_1.xyz, vec3(_SquashAmount));
+  tmpvar_4.xyz = mix ((pos_1.xyz + (
+    dot (_SquashPlaneNormal.xyz, (tmpvar_3 - pos_1.xyz))
+   * _SquashPlaneNormal.xyz)), pos_1.xyz, vec3(_SquashAmount));
   pos_1 = tmpvar_4;
   vec4 tmpvar_5;
   tmpvar_5 = (gl_ModelViewProjectionMatrix * tmpvar_4);
@@ -43,3 +45,5 @@ void main ()
   gl_TexCoord[1] = o_6;
 }
 
+
+// inputs: 3, stats: 19 alu 0 tex 0 flow

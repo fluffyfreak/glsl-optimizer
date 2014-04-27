@@ -32,14 +32,8 @@ ast_type_specifier::print(void) const
       printf("%s ", type_name);
    }
 
-   if (is_array) {
-      printf("[ ");
-
-      if (array_size) {
-	 array_size->print();
-      }
-
-      printf("] ");
+   if (array_specifier) {
+      array_specifier->print();
    }
 }
 
@@ -72,7 +66,8 @@ ast_type_qualifier::has_layout() const
           || this->flags.q.packed
           || this->flags.q.explicit_location
           || this->flags.q.explicit_index
-          || this->flags.q.explicit_binding;
+          || this->flags.q.explicit_binding
+          || this->flags.q.explicit_offset;
 }
 
 bool
@@ -89,7 +84,8 @@ ast_type_qualifier::has_storage() const
 bool
 ast_type_qualifier::has_auxiliary_storage() const
 {
-   return this->flags.q.centroid;
+   return this->flags.q.centroid
+          || this->flags.q.sample;
 }
 
 const char*
@@ -121,13 +117,19 @@ ast_type_qualifier::merge_qualifier(YYLTYPE *loc,
    ubo_layout_mask.flags.q.packed = 1;
    ubo_layout_mask.flags.q.shared = 1;
 
+   ast_type_qualifier ubo_binding_mask;
+   ubo_binding_mask.flags.i = 0;
+   ubo_binding_mask.flags.q.explicit_binding = 1;
+   ubo_binding_mask.flags.q.explicit_offset = 1;
+
    /* Uniform block layout qualifiers get to overwrite each
     * other (rightmost having priority), while all other
     * qualifiers currently don't allow duplicates.
     */
 
    if ((this->flags.i & q.flags.i & ~(ubo_mat_mask.flags.i |
-				      ubo_layout_mask.flags.i)) != 0) {
+				      ubo_layout_mask.flags.i |
+                                      ubo_binding_mask.flags.i)) != 0) {
       _mesa_glsl_error(loc, state,
 		       "duplicate layout qualifiers used");
       return false;
@@ -157,6 +159,20 @@ ast_type_qualifier::merge_qualifier(YYLTYPE *loc,
    if ((q.flags.i & ubo_layout_mask.flags.i) != 0)
       this->flags.i &= ~ubo_layout_mask.flags.i;
 
+   for (int i = 0; i < 3; i++) {
+      if (q.flags.q.local_size & (1 << i)) {
+         if ((this->flags.q.local_size & (1 << i)) &&
+             this->local_size[i] != q.local_size[i]) {
+            _mesa_glsl_error(loc, state,
+                             "compute shader set conflicting values for "
+                             "local_size_%c (%d and %d)", 'x' + i,
+                             this->local_size[i], q.local_size[i]);
+            return false;
+         }
+         this->local_size[i] = q.local_size[i];
+      }
+   }
+
    this->flags.i |= q.flags.i;
 
    if (q.flags.q.explicit_location)
@@ -168,8 +184,16 @@ ast_type_qualifier::merge_qualifier(YYLTYPE *loc,
    if (q.flags.q.explicit_binding)
       this->binding = q.binding;
 
+   if (q.flags.q.explicit_offset)
+      this->offset = q.offset;
+
    if (q.precision != ast_precision_none)
       this->precision = q.precision;
+
+   if (q.flags.q.explicit_image_format) {
+      this->image_format = q.image_format;
+      this->image_base_type = q.image_base_type;
+   }
 
    return true;
 }

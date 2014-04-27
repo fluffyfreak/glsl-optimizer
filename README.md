@@ -19,6 +19,8 @@ starting with Unity 3.0.
 
 GLSL Optimizer is licensed according to the terms of the MIT license.
 
+See badly maintained [change log](Changelog.md).
+
 
 Usage
 -----
@@ -26,6 +28,10 @@ Usage
 Visual Studio 2010 (Windows, x86/x64) and Xcode 5+ (Mac, i386) project files for a static
 library are provided in `projects/vs2010/glsl_optimizer.sln` and `projects/xcode5/glsl_optimizer_lib`
 respectively.
+
+> Note: only the VS and Xcode project files are maintained and should work at any time.
+> There's also a cmake and gyp build system for Linux et al., and some stuff in contrib folder -
+> all that may or might not work.
 
 For Linux you can use cmake. Just type "cmake . && make" in the root directory.
 This will build the optimizer library and some executable binaries.
@@ -65,7 +71,7 @@ Notes
 
 * GLSL versions 1.10 and 1.20 are supported. 1.10 is the default, use #version 120 to specify 
 1.20.
-* GLSL ES version 1.00 is supported.
+* GLSL ES versions 1.00 and 3.00 are supported.
 
 
 Dev Notes
@@ -73,7 +79,7 @@ Dev Notes
 
 Pulling Mesa upstream:
 
-    git fetch upstream master
+    git fetch upstream
     git merge upstream/master
     sh removeDeletedByUs.sh
     # inspect files, git rm unneeded ones, fix conflicts etc.

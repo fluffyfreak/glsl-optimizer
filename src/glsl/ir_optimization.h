@@ -38,6 +38,7 @@
 #define INT_DIV_TO_MUL_RCP 0x40
 #define LRP_TO_ARITH       0x80
 #define BITFIELD_INSERT_TO_BFM_BFI 0x100
+#define LDEXP_TO_ARITH     0x200
 
 /**
  * \see class lower_packing_builtins_visitor
@@ -76,6 +77,7 @@ bool do_constant_variable_unlinked(exec_list *instructions);
 bool do_copy_propagation(exec_list *instructions);
 bool do_copy_propagation_elements(exec_list *instructions);
 bool do_constant_propagation(exec_list *instructions);
+bool do_cse(exec_list *instructions);
 void do_dead_builtin_varyings(struct gl_context *ctx,
                               gl_shader *producer, gl_shader *consumer,
                               unsigned num_tfeedback_decls,
@@ -95,6 +97,7 @@ bool do_mat_op_to_vec(exec_list *instructions);
 bool do_noop_swizzle(exec_list *instructions);
 bool do_structure_splitting(exec_list *instructions);
 bool do_swizzle_swizzle(exec_list *instructions);
+bool do_vectorize(exec_list *instructions);
 bool do_tree_grafting(exec_list *instructions);
 bool do_vec_index_to_cond_assign(exec_list *instructions);
 bool do_vec_index_to_swizzle(exec_list *instructions);
